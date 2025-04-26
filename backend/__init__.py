@@ -1,0 +1,1 @@
+"""Root package for speech translation application"""

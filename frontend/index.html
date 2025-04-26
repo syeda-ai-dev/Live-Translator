@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Speech Translator</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <h1>Real-time Speech Translator</h1>
+        <div class="status-indicator" id="connectionStatus">
+            <span class="status-dot disconnected"></span>
+            <span class="status-text">Disconnected</span>
+        </div>
+        
+        <div class="language-selector">
+            <div class="input-group">
+                <label for="sourceLanguage">Input Language:</label>
+                <select id="sourceLanguage">
+                    <option value="en" selected>English</option>
+                    <option value="de">German</option>
+                    <option value="ar">Arabic</option>
+                </select>
+            </div>
+            
+            <div class="swap-button" id="swapLanguages">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M7 16V4M7 4L3 8M7 4L11 8M17 8v12M17 20l4-4M17 20l-4-4"/>
+                </svg>
+            </div>
+            
+            <div class="input-group">
+                <label for="targetLanguage">Output Language:</label>
+                <select id="targetLanguage">
+                    <option value="en">English</option>
+                    <option value="de" selected>German</option>
+                    <option value="ar">Arabic</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button id="startButton" class="primary-button">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                    <line x1="12" y1="19" x2="12" y2="23"/>
+                    <line x1="8" y1="23" x2="16" y2="23"/>
+                </svg>
+                Start Recording
+            </button>
+            <button id="stopButton" class="primary-button" disabled>
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="6" y="4" width="12" height="16" rx="2"/>
+                </svg>
+                Stop Recording
+            </button>
+        </div>
+
+        <div class="output-container">
+            <div class="output-box">
+                <h3>Transcription</h3>
+                <div id="transcriptionOutput" class="text-output"></div>
+                <div class="audio-indicator">
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                    <div class="bar"></div>
+                </div>
+            </div>
+            
+            <div class="output-box">
+                <h3>Translation</h3>
+                <div id="translationOutput" class="text-output"></div>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>Using Faster Whisper for transcription and Deep Translator for translation</p>
+        </div>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>
