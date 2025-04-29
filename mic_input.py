@@ -6,12 +6,43 @@ import sounddevice as sd
 import numpy as np
 import os
 from faster_whisper import WhisperModel
-from argostranslate import package, translate
+import ctranslate2
+from transformers import MarianTokenizer, MarianMTModel
+from huggingface_hub import snapshot_download
+import torch
 
 class TranscriptionApp:
+    def init_whisper_model(self):
+        """Initialize Whisper model with local storage"""
+        # Create models directory if it doesn't exist
+        models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+        whisper_dir = os.path.join(models_dir, "whisper_tiny")
+        os.makedirs(whisper_dir, exist_ok=True)
+
+        try:
+            # If model already exists locally, load it
+            if os.path.exists(os.path.join(whisper_dir, "model.bin")):
+                print(f"Loading existing Whisper model from {whisper_dir}")
+                return WhisperModel(whisper_dir, device="cpu", compute_type="int8")
+            
+            # If not, download and save it locally
+            print("Downloading Whisper model to local directory...")
+            from faster_whisper.utils import download_model
+            model_path = download_model(
+                "tiny",
+                output_dir=whisper_dir,
+                local_files_only=False
+            )
+            return WhisperModel(model_path, device="cpu", compute_type="int8")
+            
+        except Exception as e:
+            print(f"Error initializing Whisper model: {e}")
+            # Fallback to direct loading if local storage fails
+            return WhisperModel("tiny", device="cpu", compute_type="int8")
+
     def __init__(self, root):
         self.root = root
-        self.root.title("Real-time Speech Transcription and Translation")
+        self.root.title("Real-time Multilingual Speech Translation")
         
         # Initialize audio parameters
         self.sample_rate = 16000
@@ -19,129 +50,230 @@ class TranscriptionApp:
         self.running = False
         
         # Initialize Whisper model (tiny for fast processing)
-        self.model = WhisperModel("tiny", device="cpu", compute_type="int8")
+        self.model = self.init_whisper_model()
         
-        # Supported languages
+        # Supported languages and their corresponding codes
         self.languages = {
             "Auto": None,
             "Arabic": "ar",
-            "English": "en"
+            "English": "en",
+            "German": "de"
         }
         
-        # Initialize translation modules
+        # Initialize translation models
         self.translation_pairs = {}
+        self.tokenizers = {}
         self.init_translation()
         
         self.setup_gui()
         
+        # Bind window close event
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+    def ensure_ct2_conversion(self, lang_pair_dir):
+        """Ensure model is converted to CT2 format"""
+        ct2_dir = os.path.join(lang_pair_dir, "ct2")
+        if not os.path.exists(ct2_dir) or not os.path.exists(os.path.join(ct2_dir, "model.bin")):
+            print(f"Converting model in {lang_pair_dir} to CT2 format...")
+            try:
+                # Clean up any existing failed conversion
+                if os.path.exists(ct2_dir):
+                    import shutil
+                    shutil.rmtree(ct2_dir)
+                
+                # Convert directly from the pytorch model to CT2 format
+                ctranslate2.converters.TransformersConverter(lang_pair_dir).convert(
+                    output_dir=ct2_dir,
+                    quantization="int8",
+                    force=True
+                )
+                return True
+            except Exception as e:
+                print(f"Error converting to CT2 format: {e}")
+                return False
+        return True
+
     def init_translation(self):
-        """Initialize translation pairs using Argos Translate"""
-        print("Initializing translation pairs...")
+        """Initialize translation models using CTranslate2"""
+        print("Initializing translation models...")
         
-        # First, check if packages are installed
-        installed_languages = translate.get_installed_languages()
-        print(f"Found {len(installed_languages)} installed languages:")
-        for lang in installed_languages:
-            print(f"  - {lang.code}: {lang.name}")
-            
-        # If no languages are installed, try manual installation
-        if len(installed_languages) == 0:
-            self.manual_package_install()
-            # Refresh installed languages
-            installed_languages = translate.get_installed_languages()
-            print(f"After manual installation, found {len(installed_languages)} languages:")
-            for lang in installed_languages:
-                print(f"  - {lang.code}: {lang.name}")
-        
-        # Create translation pairs for our supported languages
-        for from_lang in ["ar", "en"]:
-            for to_lang in ["ar", "en"]:
-                if from_lang != to_lang:
-                    from_code = from_lang
-                    to_code = to_lang
-                    
-                    print(f"Setting up translation: {from_code} -> {to_code}")
-                    
-                    # Find the language objects
-                    from_lang_obj = next((lang for lang in installed_languages if lang.code.startswith(from_code)), None)
-                    to_lang_obj = next((lang for lang in installed_languages if lang.code.startswith(to_code)), None)
-                    
-                    if from_lang_obj and to_lang_obj:
-                        print(f"  Found models for {from_lang_obj.code} -> {to_lang_obj.code}")
-                        try:
-                            translation = from_lang_obj.get_translation(to_lang_obj)
-                            self.translation_pairs[(from_code, to_code)] = translation
-                            print(f"  Successfully created translator for {from_code} -> {to_code}")
-                            
-                            # Test the translation
-                            test_result = translation.translate("Hello world")
-                            print(f"  Test translation: 'Hello world' -> '{test_result}'")
-                        except Exception as e:
-                            print(f"  Error creating translator for {from_code} -> {to_code}: {e}")
-                    else:
-                        print(f"  Missing language model: from_lang={from_lang_obj}, to_lang={to_lang_obj}")
-        
-        print(f"Initialized {len(self.translation_pairs)} translation pairs: {list(self.translation_pairs.keys())}")
-    
-    def manual_package_install(self):
-        """Manually install packages from files"""
-        print("Attempting to manually install language packages...")
-        
-        # Check common locations for package files
-        package_dirs = [
-            os.path.join(os.path.expanduser("~"), ".local", "share", "argos-translate", "packages"),
-            os.path.join(os.path.expanduser("~"), ".argos-translate", "packages")
+        # Define model pairs we want to support
+        model_pairs = [
+            ("en", "ar", "Helsinki-NLP/opus-mt-en-ar"),
+            ("ar", "en", "Helsinki-NLP/opus-mt-ar-en"),
+            ("en", "de", "Helsinki-NLP/opus-mt-en-de"),
+            ("de", "en", "Helsinki-NLP/opus-mt-de-en"),
+            ("ar", "de", "Helsinki-NLP/opus-mt-ar-de"),
+            ("de", "ar", "Helsinki-NLP/opus-mt-de-ar")
         ]
         
-        for package_dir in package_dirs:
-            if os.path.exists(package_dir):
-                print(f"Found package directory: {package_dir}")
-                for filename in os.listdir(package_dir):
-                    if filename.endswith('.argosmodel'):
-                        package_path = os.path.join(package_dir, filename)
-                        print(f"Installing package from: {package_path}")
+        # Get the models directory path
+        models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+        print(f"Looking for models in: {models_dir}")
+        
+        for src_lang, tgt_lang, model_name in model_pairs:
+            try:
+                # Construct paths
+                lang_pair_dir = os.path.join(models_dir, f"{src_lang}_{tgt_lang}")
+                
+                if os.path.exists(lang_pair_dir):
+                    # Ensure model is converted to CT2 format
+                    if self.ensure_ct2_conversion(lang_pair_dir):
+                        ct2_dir = os.path.join(lang_pair_dir, "ct2")
+                        print(f"Loading model for {src_lang}->{tgt_lang} from {ct2_dir}")
+                        
+                        # Load the CTranslate2 model
+                        translator = ctranslate2.Translator(
+                            ct2_dir,
+                            device="cpu",
+                            compute_type="int8",
+                            inter_threads=2,
+                            intra_threads=2
+                        )
+                        
+                        # Load the tokenizer
                         try:
-                            package.install_from_path(package_path)
-                            print(f"Successfully installed {filename}")
-                        except Exception as e:
-                            print(f"Failed to install {filename}: {e}")
-            else:
-                print(f"Package directory not found: {package_dir}")
+                            # First try loading from the original model directory
+                            tokenizer = MarianTokenizer.from_pretrained(lang_pair_dir)
+                        except:
+                            # Fallback to loading from Hugging Face
+                            tokenizer = MarianTokenizer.from_pretrained(f"Helsinki-NLP/opus-mt-{src_lang}-{tgt_lang}")
+                        
+                        # Store both the translator and tokenizer
+                        self.translation_pairs[(src_lang, tgt_lang)] = translator
+                        self.tokenizers[(src_lang, tgt_lang)] = tokenizer
+                        
+                        print(f"Successfully loaded translation model for {src_lang}->{tgt_lang}")
+                    else:
+                        print(f"Failed to convert model for {src_lang}->{tgt_lang} to CT2 format")
+                else:
+                    print(f"Model directory not found: {lang_pair_dir}")
+                
+            except Exception as e:
+                print(f"Error setting up translation for {src_lang}->{tgt_lang}: {e}")
+                print(f"Model files available in {lang_pair_dir}:")
+                if os.path.exists(lang_pair_dir):
+                    print("\n".join(os.listdir(lang_pair_dir)))
     
+    def update_gui_safely(self, widget, text):
+        """Thread-safe method to update GUI widgets"""
+        try:
+            self.root.after(0, lambda: widget.insert(tk.END, text))
+            self.root.after(0, lambda: widget.see(tk.END))
+        except Exception as e:
+            print(f"GUI update error: {e}")
+    
+    def clean_translated_text(self, text):
+        """Clean up translated text by removing redundant spaces and repeated words/phrases"""
+        # Remove multiple spaces
+        text = ' '.join(text.split())
+        
+        # Handle specific common repeated tokens
+        common_repeats = ['Hallo', 'Hello', 'Hi', 'Thank', 'Danke', 'Thanks']
+        words = text.split()
+        cleaned_words = []
+        
+        i = 0
+        while i < len(words):
+            word = words[i]
+            # Skip consecutive repeats of common words
+            if word in common_repeats:
+                # Add only one instance of the repeated word
+                cleaned_words.append(word)
+                # Skip all consecutive occurrences
+                while i + 1 < len(words) and words[i + 1] == word:
+                    i += 1
+            else:
+                # For other words, check for immediate repetition
+                if not cleaned_words or word != cleaned_words[-1]:
+                    cleaned_words.append(word)
+            i += 1
+            
+        # Clean up punctuation
+        text = ' '.join(cleaned_words)
+        text = text.replace(' ,', ',').replace(' .', '.').replace(' !', '!').replace(' ?', '?')
+        return text
+
     def translate_text(self, text, src_lang, tgt_lang):
-        """Translate text using Argos Translate"""
+        """Translate text using CTranslate2"""
+        if not text.strip():
+            return ""
+            
         if src_lang == tgt_lang:
             return text
             
         if src_lang == "Auto":
-            # Use detected language from Whisper
             segments, info = self.model.transcribe(text)
             src_lang = info.language
-            print(f"Detected language: {src_lang} with probability {info.language_probability}")
-        
-        print(f"Attempting to translate: {src_lang} -> {tgt_lang}")
-        print(f"Available translation pairs: {list(self.translation_pairs.keys())}")
-        
-        # Ensure we have the correct language pair
-        if (src_lang, tgt_lang) not in self.translation_pairs:
-            print(f"Translation pair not found: {src_lang} -> {tgt_lang}")
-            return f"[Missing translation model: {src_lang}->{tgt_lang}]"
+            if src_lang not in ["en", "ar", "de"]:
+                src_lang = "en"
         
         try:
             translator = self.translation_pairs.get((src_lang, tgt_lang))
-            if translator:
-                translated = translator.translate(text)
-                if translated:
-                    return translated
-                else:
-                    print("Translation returned empty result")
-                    return f"[Empty translation: {src_lang}->{tgt_lang}]"
+            tokenizer = self.tokenizers.get((src_lang, tgt_lang))
+            
+            if translator and tokenizer:
+                # Pre-process input text to handle sentence boundaries
+                sentences = [s.strip() for s in text.split('.') if s.strip()]
+                if not sentences:
+                    sentences = [text]
+                
+                translated_sentences = []
+                for sentence in sentences:
+                    # Use the newer tokenizer API
+                    model_inputs = tokenizer(
+                        sentence,
+                        return_tensors=None,
+                        padding=False,
+                        truncation=True,
+                        max_length=512
+                    )
+                    
+                    # Convert input ids to tokens
+                    tokens = tokenizer.convert_ids_to_tokens(model_inputs["input_ids"])
+                    
+                    # Translate using more constrained parameters
+                    results = translator.translate_batch(
+                        [tokens],
+                        beam_size=5,
+                        length_penalty=1.0,
+                        max_decoding_length=128,
+                        return_scores=True,
+                        sampling_topk=1,
+                        no_repeat_ngram_size=3
+                    )
+                    
+                    # Get highest scoring translation
+                    translated_tokens = results[0].hypotheses[0]
+                    
+                    # Convert tokens back to text using the tokenizer's decode method
+                    translated = tokenizer.decode(
+                        tokenizer.convert_tokens_to_ids(translated_tokens),
+                        skip_special_tokens=True,
+                        clean_up_tokenization_spaces=True
+                    )
+                    
+                    if translated.strip():
+                        translated_sentences.append(translated.strip())
+                
+                # Join sentences with proper punctuation
+                final_translation = '. '.join(translated_sentences)
+                if final_translation and not final_translation.endswith('.'):
+                    final_translation += '.'
+                    
+                return final_translation.strip()
             else:
-                print(f"Translator object not found for {src_lang}->{tgt_lang}")
-                return f"[Translator not found: {src_lang}->{tgt_lang}]"
+                # Try pivot translation through English if direct path not available
+                if src_lang != "en" and tgt_lang != "en":
+                    en_translation = self.translate_text(text, src_lang, "en")
+                    return self.translate_text(en_translation, "en", tgt_lang)
+                return f"[No translation model: {src_lang}->{tgt_lang}]"
+                
         except Exception as e:
-            print(f"Translation error: {e}")
-            return f"[Translation error: {src_lang}->{tgt_lang}] - {str(e)}"
+            print(f"[Translation Error] {src_lang}->{tgt_lang}: {str(e)}")
+            print(f"Text being translated: {text}")
+            print(f"Available translation pairs: {list(self.translation_pairs.keys())}")
+            return f"[Error: {str(e)}]"
 
     def setup_gui(self):
         # Create main frame
@@ -234,18 +366,16 @@ class TranscriptionApp:
                         transcription += segment.text + " "
                     
                     if transcription.strip():
-                        # Update transcription area
-                        self.text_area.insert(tk.END, transcription + "\n")
-                        self.text_area.see(tk.END)
+                        # Update transcription area safely
+                        self.update_gui_safely(self.text_area, transcription + "\n")
                         
-                        # Perform translation and update translation area
+                        # Perform translation and update translation area safely
                         translation = self.translate_text(
                             transcription.strip(),
-                            selected_src_lang or "en",  # fallback to English if Auto
+                            selected_src_lang or "en",
                             selected_tgt_lang
                         )
-                        self.translation_area.insert(tk.END, translation + "\n")
-                        self.translation_area.see(tk.END)
+                        self.update_gui_safely(self.translation_area, translation + "\n")
                     
                     # Clear the audio buffer
                     audio_data = []
@@ -255,7 +385,12 @@ class TranscriptionApp:
             except Exception as e:
                 print(f"Error during processing: {e}")
                 continue
-                
+    
+    def on_closing(self):
+        """Handle window closing event"""
+        self.stop_transcription()
+        self.root.destroy()
+    
     def start_transcription(self):
         """Start the transcription process"""
         self.running = True
@@ -282,20 +417,24 @@ class TranscriptionApp:
         
     def stop_transcription(self):
         """Stop the transcription process"""
-        self.running = False
-        if hasattr(self, 'stream'):
-            self.stream.stop()
-            self.stream.close()
-        if hasattr(self, 'process_thread'):
-            self.process_thread.join()
+        if self.running:
+            self.running = False
+            if hasattr(self, 'stream'):
+                self.stream.stop()
+                self.stream.close()
+            if hasattr(self, 'process_thread'):
+                self.process_thread.join(timeout=1.0)  # Wait up to 1 second for thread to finish
             
-        # Update button states
-        self.start_button.config(state=tk.NORMAL)
-        self.stop_button.config(state=tk.DISABLED)
-        
-        # Add stopped message
-        self.text_area.insert(tk.END, "\nTranscription stopped.\n")
-        self.translation_area.insert(tk.END, "\nTranslation stopped.\n")
+            # Update button states safely
+            try:
+                self.start_button.config(state=tk.NORMAL)
+                self.stop_button.config(state=tk.DISABLED)
+                
+                # Add stopped message safely
+                self.update_gui_safely(self.text_area, "\nTranscription stopped.\n")
+                self.update_gui_safely(self.translation_area, "\nTranslation stopped.\n")
+            except:
+                pass  # Ignore errors during shutdown
 
 def main():
     root = tk.Tk()

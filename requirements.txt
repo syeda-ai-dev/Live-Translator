@@ -11,4 +11,3 @@ faster-whisper
 numpy
 torch
 sacremoses
-argostranslate
