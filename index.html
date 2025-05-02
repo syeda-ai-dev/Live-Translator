@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Multilingual Speech Translation</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Real-time Multilingual Speech Translation</h1>
+        </header>
+        
+        <div class="language-selection">
+            <div class="language-selector">
+                <label for="source-language">Source Language</label>
+                <select id="source-language">
+                    <option value="Auto" selected>Auto</option>
+                    <option value="Arabic">Arabic</option>
+                    <option value="English">English</option>
+                    <option value="German">German</option>
+                </select>
+            </div>
+            
+            <div class="language-selector">
+                <label for="target-language">Target Language</label>
+                <select id="target-language">
+                    <option value="English" selected>English</option>
+                    <option value="Arabic">Arabic</option>
+                    <option value="German">German</option>
+                </select>
+            </div>
+        </div>
+        
+        <div class="text-areas">
+            <div class="text-panel">
+                <h2>Transcription</h2>
+                <div id="transcription" class="text-display"></div>
+            </div>
+            
+            <div class="text-panel">
+                <h2>Translation</h2>
+                <div id="translation" class="text-display"></div>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <button id="start-button" class="control-button">
+                <i class="fas fa-microphone"></i> Start
+            </button>
+            <button id="stop-button" class="control-button" disabled>
+                <i class="fas fa-stop"></i> Stop
+            </button>
+        </div>
+        
+        <div class="status">
+            <div id="status-indicator" class="status-inactive"></div>
+            <span id="status-text">Ready</span>
+        </div>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>
